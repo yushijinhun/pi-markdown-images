@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  Markdown, TuiMainScreen, setCapabilities, setCellDimensions, visibleWidth,
+  Image, Markdown, TuiMainScreen, setCapabilities, setCellDimensions, visibleWidth,
   type DefaultTextStyle, type Terminal,
 } from "@earendil-works/pi-tui";
 import { ImageStore } from "../src/images.js";
 import { installMarkdownImagePatch, isImageLine } from "../src/markdown-patch.js";
-import { dataUrl, load, theme } from "./helpers.js";
+import { installTallImagePatch } from "../src/tall-images.js";
+import { dataUrl, load, png, theme } from "./helpers.js";
 
 class TestTui extends TuiMainScreen {
   flush(): void { this.doRender(); }
@@ -84,4 +85,39 @@ test("Pi pre-clears every Kitty row before drawing on full and differential rend
         `${caption}: host must draw the complete image after preparing its rows`);
     }
   } finally { patch.uninstall(); store.dispose(); }
+});
+
+test("Kitty images taller than the screen are drawn as one slice placement per row", () => {
+  setup();
+  const uninstall = installTallImagePatch();
+  let writes = "";
+  const terminal: Terminal = {
+    columns: 60, rows: 6, kittyProtocolActive: false,
+    write: (data) => { writes += data; },
+    start() {}, stop() {}, async drainInput() {}, moveBy() {}, hideCursor() {}, showCursor() {},
+    clearLine() {}, clearFromCursor() {}, clearScreen() {}, setTitle() {}, setProgress() {},
+  };
+  try {
+    const tui = new TestTui(terminal);
+    const image = new Image(png(120, 400).toString("base64"), "image/png", { fallbackColor: (s) => s });
+    const rows = image.render(terminal.columns).length;
+    assert.ok(rows > terminal.rows, "fixture must be taller than the screen");
+    tui.addChild(image);
+    tui.flush();
+    // WezTerm keeps a C=1 placement only on rows that are on screen when it is drawn, and drops
+    // other placements of the image unless each has its own id.
+    const commands = [...writes.matchAll(/\x1b_G([^;\x1b]*)/g)]
+      .map((match) => new Map(match[1]!.split(",").map((control) => control.split("=") as [string, string])))
+      .filter((controls) => controls.has("a"));
+    assert.equal(commands.length, rows);
+    let sourceY = 0;
+    for (const [row, controls] of commands.entries()) {
+      assert.equal(controls.get("a"), row === 0 ? "T" : "p");
+      assert.equal(controls.get("r"), "1");
+      assert.equal(controls.get("p"), String(row + 1));
+      assert.equal(Number(controls.get("y")), sourceY, "slices are contiguous");
+      sourceY += Number(controls.get("h"));
+    }
+    assert.equal(sourceY, 400, "slices cover the whole image");
+  } finally { uninstall(); }
 });

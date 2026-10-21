@@ -2,13 +2,16 @@ import { SettingsManager, type ExtensionAPI, type ExtensionContext } from "@eare
 import { getCapabilities } from "@earendil-works/pi-tui";
 import { ImageStore } from "./images.js";
 import { installMarkdownImagePatch, type ImagePatch } from "./markdown-patch.js";
+import { installTallImagePatch } from "./tall-images.js";
 
 const WIDGET = "pi-markdown-images";
+const isWezTerm = () => Boolean(process.env.WEZTERM_PANE) || process.env.TERM_PROGRAM?.toLowerCase() === "wezterm";
 
 export default function markdownImages(pi: ExtensionAPI): void {
   let patch: ImagePatch | undefined;
   let store: ImageStore | undefined;
   let requestRender: (() => void) | undefined;
+  let uninstallTallImages: (() => void) | undefined;
 
   function settings(ctx: ExtensionContext) {
     const manager = SettingsManager.create(ctx.cwd, undefined, { projectTrusted: ctx.isProjectTrusted() });
@@ -18,10 +21,12 @@ export default function markdownImages(pi: ExtensionAPI): void {
   function stop(): void {
     store?.dispose();
     patch?.uninstall();
+    uninstallTallImages?.();
     requestRender?.();
     patch = undefined;
     store = undefined;
     requestRender = undefined;
+    uninstallTallImages = undefined;
   }
 
   pi.registerMarkdownTransformer((text, context) => {
@@ -37,6 +42,8 @@ export default function markdownImages(pi: ExtensionAPI): void {
       patch = installMarkdownImagePatch({
         ...settings(ctx), store, requestRender: () => requestRender?.(),
       });
+      // Also covers images that Pi itself renders, such as `read` results.
+      if (isWezTerm()) uninstallTallImages = installTallImagePatch();
       // The widget renders zero rows. Its factory supplies the host TUI redraw API.
       ctx.ui.setWidget(WIDGET, (tui) => {
         const render = () => tui.requestRender();
@@ -84,7 +91,8 @@ export default function markdownImages(pi: ExtensionAPI): void {
       const state = patch.isEnabled() ? "on" : "off";
       const protocol = getCapabilities().images ?? "no image protocol";
       const visibility = settings(ctx).showImages ? "" : "; terminal.showImages is off";
-      ctx.ui.notify(`Markdown images: ${state}; ${protocol}${visibility}; ${store.size} cached sources, ` +
+      const tallImages = uninstallTallImages ? "; WezTerm tall-image fix on" : "";
+      ctx.ui.notify(`Markdown images: ${state}; ${protocol}${visibility}${tallImages}; ${store.size} cached sources, ` +
         `${(store.cacheBytes / 1024 / 1024).toFixed(1)} MiB` +
         (store.lastError ? `\nLast load error: ${store.lastError}` : ""), "info");
     },

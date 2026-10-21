@@ -54,6 +54,11 @@ Settings are refreshed at turn start and when running an extension command.
 Transient thinking blocks do not load images. Terminal drawing and scrolling
 are handled by Pi, including its protocol limitations in fullscreen mode.
 
+In WezTerm, the extension also fixes images taller than the terminal in Pi's
+regular mode, including images from `read`. Pi draws such an image as one Kitty
+placement, which WezTerm cuts off at the bottom screen row, often leaving a
+one-row strip. The extension draws these images one row at a time instead.
+
 ### Commands
 
 ```text
@@ -100,6 +105,14 @@ visible width so Pi clears them before drawing the image, rather than erasing
 its lower rows afterward. The accessor is restored on extension shutdown.
 `src/index.ts` manages TUI lifecycle, settings and commands. A widget that emits
 zero rows supplies the host's redraw callback.
+
+`src/tall-images.ts` patches `TuiMainScreen.applyLineResets`, the main-screen
+renderer's last per-frame line pass, when running in WezTerm. It replaces each
+Kitty image block taller than the terminal with one placement per row: the first
+row transmits the image and places its top slice (`y`, `h`, `r=1`), and later
+rows place the next slices with `a=p`. Each slice has its own placement id,
+because WezTerm removes every placement of an image when another is drawn
+without one. The patch is removed on session shutdown.
 
 Pi does not expose an image-token renderer hook, so this extension uses the
 private `renderToken` and `renderInlineTokens` methods and a few Markdown cache
